@@ -210,7 +210,10 @@ sub ParseTuple ($$$$)
 #  print ">>",Dumper($header);
 #  print ">>nulllist=",join(",",@nulls),"\n";
 #  sleep 1;
-  
+ 
+  print ">> Tupledata: ",(map { sprintf "%02X ", $_ } unpack("C*", $tupledata)),"\n";
+
+ 
   if( $header->{natts} > scalar(@$attrinfo) )
   {
     print ErrorContext( "Tuple header attribute count exceeds number in table (".$header->{natts}." > ".scalar(@$attrinfo).")" );
@@ -229,7 +232,7 @@ sub ParseTuple ($$$$)
     my ($name,$type,$len,$align) = @{ $attrinfo->[$i-1] };
     #print "NTLA: $name $type $len $align\n";
 
-#    print ">> Off $off: Field $i: ($name,$type,$len,$align)\n";
+    print ">> Off $off: Field $i: ($name,$type,$len,$align)\n";
     
     # If it's null, attribute is skipped
     if( defined ($nulls[$i-1]) and not $nulls[$i-1] )
@@ -239,8 +242,16 @@ sub ParseTuple ($$$$)
       next;
     }
 
+    my $volgende_byte = unpack("C", substr($tupledata,$off));   # Decode the first byte
+
+    
+    if ($len == -1 && $volgende_byte != 0x00 && $volgende_byte & 0x01 == 0x01) {
+	# niet alignen
+	print "Skipped alignment!\n";
+    } else {
     # Deal with the alignment requirements
     $off = ($off + $align - 1) & ~($align - 1);
+    }
     print ">> Aligned Off $off: Field $i: ($name,$type,$len,$align)\n";
 
     # Have we gone over the length of the tuple?
@@ -300,6 +311,29 @@ sub ParseTuple ($$$$)
 
       my $va_header = unpack("L", $fielddata);   # Decode the first byte
       my $va_header_1b = unpack("C", $fielddata);   # Decode the first byte
+      my $varsize_4b = ($va_header >> 2 ) & 0x3FFFFFFF;
+      my $varsize_1b = ($va_header_1b >> 1) & 0x7F;
+
+	if ($va_header_1b & 0x01 == 0x01) {
+		# 1 byte, toast of uncompressed
+		if ($va_header_1b == 0x01) {
+			die "fucked, this is toast"
+		} else {
+			# 1 byte uncompressed, inline
+                	$len = $varsize_1b;
+                	$val = substr($fielddata,1,$len-1);
+		}
+	} else {
+		# 4 byte, uncompressed of compressed
+		if ($va_header_1b & 0x02 == 0x02)  {
+			# 4 byte compressed
+		} else {
+			# 4 byte uncompressed
+		}
+
+	}
+
+my $varsize_4b = ($va_header >> 2 ) & 0x3FFFFFFF;
 
 #      print "Variable length: $va_header (" . length($fielddata) . ")\n";
 
