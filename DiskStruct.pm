@@ -1,5 +1,6 @@
 package DiskStruct;
 use strict;
+use Data::Dumper;
 
 # Copyright Martijn van Oosterhout <kleptog@svana.org> - April 2002
 # You may do whatever you like with code code.
@@ -12,6 +13,9 @@ use strict;
 sub new
 {
   my ($class,$structure,$fields) = @_;
+
+#  print "Fields data ($structure):\n";
+#  Dumper($fields);
 
   return bless { _structure => $structure, _fields => $fields }, $class;
 }

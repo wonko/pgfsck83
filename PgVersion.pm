@@ -84,6 +84,11 @@ sub GetPageHeader ()
   {
     return new DiskStruct( "SSSS", [ qw(lower upper special opaque) ] );
   }
+  elsif ( $version == 83 ) 
+  {
+    print "OM: 8.3 headers\n";
+    return new DiskStruct( "LLLSSSCCI", [ qw(lsn1 lsn2 sui lower upper special version pagesize prunexid) ] );
+  }
   else
   {
     return new DiskStruct( "LLLSSSCC", [ qw(lsn1 lsn2 sui lower upper special version pagesize) ] );
@@ -112,6 +117,13 @@ sub GetPGAttribute ()
                            attndim attcacheoff atttypmod  attbyval attstorage attisset attalign  
                            attnotnull atthasdef) ] );
   }
+  elsif( $version == 83)
+  { 
+    print "OM: Attribute structure 83\n";
+    return new DiskStruct( "LA64Ll ss lll CCC cccc L", [ qw(attrelid attname atttypid attstattarget  attlen attnum  
+                           attndim attcacheoff atttypmod  attbyval attstorage attalign attnotnull atthasdef attisdropped attislocal attinhcount 
+                           ) ] );
+  }
   else
   {
     return new DiskStruct( "LA64Ll ss lll CCC", [ qw(attrelid attname atttypid attstattarget  attlen attnum  
@@ -128,6 +140,11 @@ sub GetTupleHeader ()
   }
   elsif( $version < 80 )  # Grew by 4 bytes in 8.0
   {
+    return new DiskStruct( "LLLSSSSSC", [ qw( xmin xmax xvac tid1 tid2 tid3 natts infomask size ) ] );
+  }
+  elsif ( $version == 83 )
+  {
+    print "OM: tuple 83\n";
     return new DiskStruct( "LLLSSSSSC", [ qw( xmin xmax xvac tid1 tid2 tid3 natts infomask size ) ] );
   }
   else

@@ -73,10 +73,12 @@ my $indextupleheader = new DiskStruct( "LSS", [ qw( page tuple flags ) ] );
 # pg_attribute did change between versions
 my $pg_attribute = GetPGAttribute();
 
+print "pg_attribute $pg_attribute\n";
+
 # pg_class did change, but since we only use the first field, this works to start with
 my $pg_class = new DiskStruct( "A32", [qw(relname)] );
 
-my %tableoid = ( "pg_class" => 1259, "pg_database" => 1262 );    # Map table to OID
+my %tableoid = ( "pg_class" => 1259, "pg_database" => 1262, "beheer" => 2642844, "ruimtelijke_eenheid_contact_v2" => 2692428 );    # Map table to OID
 my %tableattrs = ( "pg_class" => $pg_class, "pg_attribute" => $pg_attribute );  # Map table to structure
 my %dboidmap = ( "template1" => 1 );   # Bootstrap database to OID map
 my %toasttableoid = ();   # No bootstrapping needed here
@@ -92,6 +94,7 @@ my %typeoutputs = ( bool   => sub { (unpack "C", $_[0])?'t':'f' },
                     oidvector => sub { "oidvector(".join(",",unpack("I*",$_[0])).")" },
                     name       => sub { unpack "A*", $_[0] },
                     oid        => sub { unpack "L", $_[0] },
+                    xid        => sub { unpack "L", $_[0] },
                     int2       => sub { unpack "s", $_[0] },
                     int4       => sub { unpack "l", $_[0] },
                     int8       => sub { my @a = unpack "Ll", $_[0]; $a[1]*(2**32)+$a[0] },
@@ -133,7 +136,7 @@ sub GetAttributeInfo ($)
   my $res = TableScan( "pg_attribute", sub { $_[0]{attrelid} == $classoid and $_[0]{attnum} > 0 } );
   my @attrs = sort { $a->{attnum} <=> $b->{attnum} } @$res;
 
-#  print Dumper( \@attrs );
+  print "GetAttributeInfo $class: ". Dumper( \@attrs );
 
   my @attinfo;
 
@@ -224,8 +227,9 @@ sub ParseTuple ($$$$)
       next;
     }
     my ($name,$type,$len,$align) = @{ $attrinfo->[$i-1] };
+    #print "NTLA: $name $type $len $align\n";
 
-#    print ">> Off $off: Field $i: ($name,$type,$len,$align)\n";
+    #print ">> Off $off: Field $i: ($name,$type,$len,$align)\n";
     
     # If it's null, attribute is skipped
     if( defined ($nulls[$i-1]) and not $nulls[$i-1] )
@@ -291,9 +295,74 @@ sub ParseTuple ($$$$)
     elsif( $len == -1 )  # Variable length
     {
       my $va_header = unpack("l", $fielddata);   # Decode the first byte
+      my $va_header_1b = unpack("c", $fielddata);   # Decode the first byte
 
-      if( $va_header & 0x80000000 )  # External tuple?
+#      print "Variable length: $va_header (" . length($fielddata) . ")\n";
+
+# from the C
+my $is_b = 4; 
+my $is_c = 0;
+my $is_u = 0;
+#define VARATT_IS_4B(PTR) \
+#        ((((varattrib_1b *) (PTR))->va_header & 0x01) == 0x00)
+	#print "varatt_is_4b" 
+	if (($va_header_1b & 0x01) == 0x00) {
+		$is_b = 4;	
+                $is_c = 0;
+                $is_u = 0;
+	}
+#define VARATT_IS_4B_U(PTR) \
+#        ((((varattrib_1b *) (PTR))->va_header & 0x03) == 0x00)
+        #print "varatt_is_4b_u" 
+	if (($va_header_1b & 0x03) == 0x00) {
+                $is_b = 4;    
+                $is_c = 0;
+                $is_u = 1;
+        }
+
+#define VARATT_IS_4B_C(PTR) \
+#        ((((varattrib_1b *) (PTR))->va_header & 0x03) == 0x02)
+        #print "varatt_is_4b_c" 
+	if (($va_header_1b & 0x03) == 0x02) {
+                $is_b = 4;    
+                $is_c = 1;
+                $is_u = 0;
+        }
+
+#define VARATT_IS_1B(PTR) \
+#        ((((varattrib_1b *) (PTR))->va_header & 0x01) == 0x01)
+        #print "varatt_is_1b" 
+	if (($va_header_1b & 0x01) == 0x01) {
+                $is_b = 1;    
+                $is_c = 0;
+                $is_u = 0;
+        }
+
+#define VARATT_IS_1B_E(PTR) \
+#        ((((varattrib_1b *) (PTR))->va_header) == 0x01)
+        print "varatt_is_1b_e" if ($va_header_1b) == 0x01 ;
+#define VARATT_NOT_PAD_BYTE(PTR) \
+#        (*((uint8 *) (PTR)) != 0)
+
+#print "BCU: $is_b $is_c $is_u\n";
+
+#/* VARSIZE_4B() should only be used on known-aligned data */
+#define VARSIZE_4B(PTR) \
+#        ((((varattrib_4b *) (PTR))->va_4byte.va_header >> 2) & 0x3FFFFFFF)
+my $varsize_4b = ($va_header >> 2 ) & 0x3FFFFFFF;
+#print "Varsize_4b: $varsize_4b \n";
+#define VARSIZE_1B(PTR) \
+#        ((((varattrib_1b *) (PTR))->va_header >> 1) & 0x7F)
+my $varsize_1b = ($va_header_1b >> 1) & 0x7F;
+#print "Varsize_1b: $varsize_1b \n";
+#define VARSIZE_1B_E(PTR) \
+#        (((varattrib_1b_e *) (PTR))->va_len_1be)
+
+
+      #if( $va_header & 0x80000000 )  # External tuple?
+      if( ($va_header_1b) == 0x01 )  # External tuple?
       {
+	print "External tuple\n";
         # We decode the location, but don't look it up
         my @vals = unpack("llLL", substr($fielddata,4));
 #        print "-- extern(raw=$vals[0],real=$vals[1],oid=$vals[2],relid=$vals[3])\n";
@@ -302,26 +371,38 @@ sub ParseTuple ($$$$)
       }
       else  # Ordinary inline value
       {
-        $val = substr($fielddata,4,($va_header & 0x3fffffff)-4);
+	if($is_b == 4) {
+		$len = $varsize_4b;
+		$val = substr($fielddata,4,$len-4);
+	} else {
+		$len = $varsize_1b;
+		$val = substr($fielddata,1,$len-1);
+	}
+        #$val = substr($fielddata,4,($va_header & 0x3fffffff)-4);
+	#$len = ($va_header & 0x3fffffff) -4;
+	print "Inline Len: $len Value: '$val'\n";
       }
 
-      if( $va_header & 0x40000000 )  # Compressed tuple?
+      #if( $va_header & 0x40000000 )  # Compressed tuple?
+      if( $is_c )  # Compressed tuple?
       {
-        my $clen = unpack("l", substr($fielddata,4));
-        $val = ToastDecompress( $clen, $val );
+	print "Compressed\n";
+        my $clen = unpack("L", substr($fielddata,4));
+        $val = ToastDecompress( $len, $val );
       }
 
       if( defined $outputfunc )
       {
         $val = $outputfunc->( $val );   # Use the output function
       }
-      $len = ($va_header & 0x3fffffff);
+      #$len = ($va_header & 0x3fffffff);
     }
     else   # All other fixed lengths
     {
       $val = unpack("A$len", $fielddata);   # Default to NULL termination
     }
     # Store value and move along
+    #print "Len/Off: $len/$off\n";
     $data{$name} = $val;
     $off += $len;
   }
@@ -350,18 +431,20 @@ sub TableScan ($$;$$)
 
   my $classoid;
   if( defined $tableoid{$class} )
-  { $classoid = $tableoid{$class} }
+     { $classoid = $tableoid{$class} }
   else
   {
     my $rels = TableScan( "pg_class", sub { $_[0]{relname} eq $class } );
     if( @$rels == 0 )
     { die "Couldn't find class '$class'\n" }
-#    if( @$rels  > 1 )   # Not an error, could be updated versions. xmax == 0 is not enough
-#    { die "Found multiple versions of '$class' ???\n" }
+    if( @$rels  > 1 )   # Not an error, could be updated versions. xmax == 0 is not enough
+    { die "Found multiple versions of '$class' ???\n" }
 
-#    print "xmax = ", join(",", map { "($_->{xmax},$_->{oid},$_->{relkind})" } @$rels), "\n";
+    print "xmax = ", join(",", map { "($_->{xmax},$_->{oid},$_->{relkind})" } @$rels), "\n";
     my @oids = sort { $b->[0] <=> $a->[0] } map { [ $_->{oid}, $_->{reltoastrelid},  $_->{relkind} ] } @$rels;
-#    print "oids = ", join(",", @oids), "\n";
+    print "oids = ", join(",", @oids), "\n";
+
+    #Dumper(@oids);
 
     $classoid = $tableoid{$class} = $oids[0][0];
     $toasttableoid{$classoid} = $oids[0][1];
@@ -384,6 +467,7 @@ sub TableScan ($$;$$)
     if( GetAttributeInfo( $class ) )
     {
       PopContext();
+	print 'not defined $tableattrs';
       return [];
     }
   }
@@ -391,10 +475,15 @@ sub TableScan ($$;$$)
   my $file;
   if( defined $filename )
   {
+	print "File $filename\n";
+	if ($file == 2936616) { $file = 2692428;}
     $file = new FileHandle "<$filename" or die "Couldn't open file $filename ($!)\n";
   }
   else
   {
+        if ($classoid == 2936616) { $classoid = 2692428;}
+	
+	print "Relation: $class, $classoid\n";
     $file = OpenRelation( $class, $classoid );
   }
 
@@ -402,6 +491,7 @@ sub TableScan ($$;$$)
   my @res;
   # Look through each block
   my $blockid = 0;
+  print "Will read through file $file\n";
   while( read $file, $buffer, $blocksize )
   {
     PushContext( "Page $blockid" );
@@ -409,6 +499,8 @@ sub TableScan ($$;$$)
     # Decode the page header
     my $headerdata = $header->decode( $buffer );
     my $i;
+
+    #print "Headerdata: " . Dumper($headerdata);
 
     if( defined $headerdata->{_error} )
     {
@@ -429,7 +521,7 @@ sub TableScan ($$;$$)
 
     my $numtuples = ($headerdata->{lower} - $headerdata->{_sizeof}) / 4;
 
-#    print "-- Page $blockid: lower $headerdata->{lower}, sizeof $headerdata->{_sizeof}, tuples: $numtuples\n";
+    #print "-- Page $blockid: lower $headerdata->{lower}, sizeof $headerdata->{_sizeof}, tuples: $numtuples\n";
 
     # Cycle through the item data pointers
     for( $i = 0; $i < $numtuples; $i ++)
@@ -437,7 +529,7 @@ sub TableScan ($$;$$)
       PopContext();
       PushContext( "Tuple $i" );
 
-#      print "-- Tuple $i\n";
+      #print "-- Tuple $i\n";
 
       my $num = unpack("L", substr( $buffer, $headerdata->{_sizeof}+4*$i, 4));
 
@@ -459,7 +551,7 @@ sub TableScan ($$;$$)
         }
         else
         {
-          next;
+         next;
         }
       }
 
@@ -504,10 +596,10 @@ sub TableScan ($$;$$)
           print ErrorContext( "Tuple not even 32 bytes long ($length)\n".join(" ", map { sprintf "%02X", $_ } unpack("C*",$tuple))."\n" );
           next;
         }
-#        print( join(" ", map { sprintf "%02X", $_ } unpack("C*",$tuple))."\n" );
+        #print( join(" ", map { sprintf "%02X", $_ } unpack("C*",$tuple))."\n" );
         
         $h = $tupleheader->decode( $tuple );
-#        print "-- TupleDump: ".Dumper( $h );
+        #print "-- TupleDump: ".Dumper( $h );
 
         if( defined $h->{_error} )
         {
@@ -524,7 +616,8 @@ sub TableScan ($$;$$)
       $h->{page} = $blockid;
       $h->{tuple} = $i;
 
-      if( $h->{infomask} & 0x0010 )   # Has OID field
+      #if( $h->{infomask} & 0x0010 )   # Has OID field
+      if( $h->{infomask} & 0x0008 )   # Has OID field
       {
          $h->{oid} = unpack( "L", substr( $tuple, $h->{size}-4, 4 ) );
       }
@@ -537,9 +630,9 @@ sub TableScan ($$;$$)
 
       if( ref( $tableattrs{$class} ) eq "DiskStruct" )  # Bootstrap structure?
       {
-#        print "class: ".$class."\n";
+        #print "class: ".$class."\n";
         $tup = $tableattrs{$class}->decode( substr( $tuple, $h->{size} ) );
-#        print "-- TupleDump: ".Dumper( $tup );
+        #print "-- TupleDump: ".Dumper( $tup );
       }
       else   # Proper attribute info, do proper decoding
       {
@@ -563,7 +656,7 @@ sub TableScan ($$;$$)
         }
       }
 
-#      if( $DEBUG ){ print Dumper($tup),"\n" }
+      #if( $DEBUG ){ print Dumper($tup),"\n" }
       # Generate tuple, test for match and remember if accepted
       my %res = (%$h,%$tup);
 
@@ -587,6 +680,8 @@ sub TableScan ($$;$$)
 sub GetDatabaseList ()
 {
   my $dblist = TableScan( "pg_database", sub {1} );
+
+  print "DBlist: ". Dumper($dblist);
 
   %dboidmap = map { ( $_->{datname}, $_->{oid} ) } @$dblist;
 }
@@ -617,16 +712,18 @@ print "-- Loading pg_attribute structure\n";
 GetAttributeInfo( "pg_attribute" );
 
 # Read pg_database to get list
-GetDatabaseList();
+#GetDatabaseList();
 
-if( not defined $dboidmap{$database} )
-{
-  die "Unknown database '$database'\n";
-}
+#if( not defined $dboidmap{$database} )
+#{
+#  die "Unknown database '$database'\n";
+#}
 
 # Switch database
 print "-- Switching to database '$database' ($dboidmap{$database})\n";
-SetDatabase( $database, $dboidmap{$database});
+#SetDatabase( $database, $dboidmap{$database});
+
+SetDatabase("beheer", 2642844);
 
 # Read the types. Chicken and egg. Read before or after switch DB?
 print "-- Loading type info\n";
@@ -701,12 +798,15 @@ sub ToastDecompress ($$)
 {
   my ($complen, $str) = @_;
 
-  my $rawlen = unpack("I", $str);
+  print "Uncompressing $complen bytes\n";
+
+  my $rawlen = unpack("L", $str);
+  print "Rawlen: $rawlen\n";
   my $offset = 4;
 
   my $output = "";
 
-#  print "-- $str\n";
+  print "-- $str\n";
 
   while( $offset < length($str) )
   {
@@ -758,8 +858,8 @@ sub ToastDecompress ($$)
       }
     }
   }
-#  print "-- output=$output\n";
-#  print "-- len=",length($output),", complen=$complen, rawlen=$rawlen\n";
+  print "-- output=$output\n";
+  print "-- len=",length($output),", complen=$complen, rawlen=$rawlen\n";
   return $output;
 }
 
