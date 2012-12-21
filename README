@@ -1,3 +1,28 @@
+Remark for pgfsck 83 - PostgreSQL 8.3 FSCK
+
+DON'T JUST RUN THIS ON YOUR CODE - IT WILL FAIL!
+
+This is the result of some hacking of the original code of this project, 
+due to the fact that I needed it to recover some records of a 8.3 datafile.
+
+I stopped developping when I had the data I needed. Luckily, I didn't need
+external data, or compressed data. All my data was inline, integers or varchars.
+
+This is in no way a completed project.
+
+The big changes I made are:
+- DiskStruct.pm was updated to read the correct header formats (grabbed from the docs)
+- All of ParseTuple was changed from big-endian to little-endian formats
+- The distinction between 1byte and 4byte varying data was introduced
+- Some hard coded oids and files and ... 
+
+If you want to use it, read the code, apply it, and modify it as needed. Please publish
+your changes, so other might benefit from it. 
+
+Sorry for the half-finished logic in ParseTuple, and redundant blocks of code :-).
+
+--- original readme below ---
+
 This program serves three purposes:
 
 1. To identify problems with PostgreSQL data files
