@@ -211,7 +211,7 @@ sub ParseTuple ($$$$)
 #  print ">>nulllist=",join(",",@nulls),"\n";
 #  sleep 1;
  
-  print ">> Tupledata: ",(map { sprintf "%02X ", $_ } unpack("C*", $tupledata)),"\n";
+#  print ">> Tupledata: ",(map { sprintf "%02X ", $_ } unpack("C*", $tupledata)),"\n";
 
  
   if( $header->{natts} > scalar(@$attrinfo) )
@@ -232,7 +232,7 @@ sub ParseTuple ($$$$)
     my ($name,$type,$len,$align) = @{ $attrinfo->[$i-1] };
     #print "NTLA: $name $type $len $align\n";
 
-    print ">> Off $off: Field $i: ($name,$type,$len,$align)\n";
+#    print ">> Off $off: Field $i: ($name,$type,$len,$align)\n";
     
     # If it's null, attribute is skipped
     if( defined ($nulls[$i-1]) and not $nulls[$i-1] )
@@ -247,12 +247,12 @@ sub ParseTuple ($$$$)
     
     if ($len == -1 && $volgende_byte != 0x00 && $volgende_byte & 0x01 == 0x01) {
 	# niet alignen
-	print "Skipped alignment!\n";
+#	print "Skipped alignment!\n";
     } else {
     # Deal with the alignment requirements
     $off = ($off + $align - 1) & ~($align - 1);
     }
-    print ">> Aligned Off $off: Field $i: ($name,$type,$len,$align)\n";
+#    print ">> Aligned Off $off: Field $i: ($name,$type,$len,$align)\n";
 
     # Have we gone over the length of the tuple?
     if( $off > length($tupledata) )
@@ -306,8 +306,8 @@ sub ParseTuple ($$$$)
     }
     elsif( $len == -1 )  # Variable length
     {
-	print "Fielddata length: ". length($fielddata) . "\n";
-    	print ">>",(map { sprintf "%02X ", $_ } unpack("C*", $fielddata)),"\n";
+#	print "Fielddata length: ". length($fielddata) . "\n";
+#    	print ">>",(map { sprintf "%02X ", $_ } unpack("C*", $fielddata)),"\n";
 
       my $va_header = unpack("L", $fielddata);   # Decode the first byte
       my $va_header_1b = unpack("C", $fielddata);   # Decode the first byte
@@ -333,11 +333,13 @@ sub ParseTuple ($$$$)
 
 	}
 
+# todo - move the logic from below to the logic above
+
 my $varsize_4b = ($va_header >> 2 ) & 0x3FFFFFFF;
 
 #      print "Variable length: $va_header (" . length($fielddata) . ")\n";
 
-# from the C
+# from the C - catalog/postgres.h contains most of the explanation of the below, open it now and read it, if you came up to here 
 my $is_b = 4; 
 my $is_c = 0;
 my $is_u = 0;
@@ -402,7 +404,7 @@ my $varsize_1b = ($va_header_1b >> 1) & 0x7F;
       #if( $va_header & 0x80000000 )  # External tuple?
       if( ($va_header_1b) == 0x01 )  # External tuple?
       {
-	print "External tuple\n";
+#	print "External tuple\n";
         # We decode the location, but don't look it up
         my @vals = unpack("llLL", substr($fielddata,4));
 #        print "-- extern(raw=$vals[0],real=$vals[1],oid=$vals[2],relid=$vals[3])\n";
@@ -419,14 +421,14 @@ my $varsize_1b = ($va_header_1b >> 1) & 0x7F;
 		$val = substr($fielddata,1,$len-1);
 	}
         #$val = substr($fielddata,4,($va_header & 0x3fffffff)-4);
-	#$len = ($va_header & 0x3fffffff) -4;
-	print "Inline $is_b Len: $len Value: '$val'\n";
+ 	#$len = ($va_header & 0x3fffffff) -4;
+#	print "Inline $is_b Len: $len Value: '$val'\n";
       }
 
       #if( $va_header & 0x40000000 )  # Compressed tuple?
       if( $is_c )  # Compressed tuple?
       {
-	print "Compressed $len\n";
+#	print "Compressed $len\n";
         my $clen = unpack("L", substr($fielddata,4));
         $val = ToastDecompress( $len, $val );
       }
@@ -449,7 +451,7 @@ my $varsize_1b = ($va_header_1b >> 1) & 0x7F;
   # Final check
   if( $off > length($tupledata)   or   $off < length($tupledata)-4 )
   {
-    print ">>",(map { sprintf "%02X ", $_ } unpack("C*", $tupledata)),"\n";
+#    print ">>",(map { sprintf "%02X ", $_ } unpack("C*", $tupledata)),"\n";
     print ErrorContext( "Tuple incorrect length (parsed data=$off,length=".length($tupledata).")" );
   }
 
