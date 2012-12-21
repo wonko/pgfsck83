@@ -1,0 +1,121 @@
+This program serves three purposes:
+
+1. To identify problems with PostgreSQL data files
+
+  Occasionally people post to the mailing list saying that doing a select *
+  from table crashes PostgreSQL. Obviously there's a problem somewhere.
+  Usually it can be solved by searching for the damaged tuple and deleting
+  it. This can be time consuming. This program should be able to identify
+  the right tuple right off.
+
+2. To make it easier for developers to get examples of corrupted files.
+
+  When corruption happens you'd like to know what caused it. Unfortunatly
+  getting people to attach a table to an email is impractical and it's
+  difficult to tell the problem from that. One plan is to provide a way to
+  dump the affected pages to a file, thus making the problem much easier to
+  find.
+
+3. Dumping program of last resort
+
+  Sometimes people do silly things like deleting their xlog or trying to
+  upgrade their postmaster without doing a pg_dump first. Anyway, since this
+  program does not require the postmaster to be running, it can recover data
+  in all sorts of situations where it would otherwise be difficult.
+
+USAGE
+
+pgfsck [-D /path/to/database] [-s blocksize] [-d] [-a] [-r filename] dbname [tablename...]
+
+    -a                 While dumping, dump all tuples rather than just xmax == 0 (default: no)
+    -d                 Dump the tables rather than just scanning them (default: no)
+    -S                 If dumping all tables, dump system tables also (default: no)
+    -D path            Use alternate database root (default: /var/lib/postgres/data)
+    -r filename        When reading table, read this file instead. Nice for testing.
+    -s blocksize       Use alternate blocksize (default: 8192)
+
+The database must be specified. The program must obviously be run by a user
+with direct access to the backend data, such root or postgres. If no table
+is specified, it defaults to all non system tables. The blocksize must be
+specified of you'll get many odd errors. This may be autodetected in the
+future. The system will read many versions of tables. The following table
+indicates compatability:
+
+- 6.5 - 7.3: not tested recently, but should work
+- 7.4 - 8.2: tested. ok
+
+By default the program will only scan for problems. If you wish to actually
+dump the data you must pass the -d option. When redirected to a file, you
+should get a script you can push right back into psql to recreate the table.
+
+Note, this dumps tuples where xmax is 0. This has the effect of only dumping
+tuples that would be valid if every transaction was committed. Since this
+program is outside the database it does not deal with transactions. What is
+dumped is a valid view, but possibly not the one you're looking for. For
+this reason the -a option is provided. It will dump *all* tuples, whether or
+not they're valid. The transaction info (xmin,xmax,cmin,cmax) is included so
+you may work out for yourself what is the correct data.
+
+Finally, there is the -r option. Most of the time you want to dump a table
+in a database. But say you have a table outside of a database (say it was
+sent by someone else), you may use this to process it without actually
+loading it into your database. Note however, the tablename of the table
+within the database must be specified. This is because without the
+information in pg_class and pg_attribute, the contents of the tables is
+mostly useless data.
+
+VERSION COMPATABILITY
+
+Above is listed what versions this program is capable of reading. However,
+there are subtle differences between these that may cause problems. The main
+differences between all these versions are:
+
+1. Page Header
+
+  To accomodate WAL, a few fields were added to the beginning of each page.
+  This causes files created by 7.1 incompatable with all previous versions.
+  This is only applicable if you wish to use the -r option across versions.
+
+2. pg_attribute layout
+
+  At version 7.0, one byte was added to the pg_attribute field. This means a
+  slight adjustment must be made. Fortunatly, this only matters initially.
+  The pg_attribute structure is stored within itself, thus it will be
+  updated with the correct version at runtime.
+
+3. Disk filenames
+
+  Version 7.2 started using oids for filenames instead of the names of the
+  tables. A good idea but it needs slight adjusting in the code. This is
+  compensated for.
+
+EXAMPLE
+
+Here is an example of the program being run over a suitably hexedited file.
+# ./pgfsck -r 16559 kleptog website
+-- Detected database format 7.2
+-- Table pg_class(1259):Page 1:Tuple 0: Unknown type _aclitem (1034)
+-- Table pg_class(1259):Page 1:Tuple 49: Unknown type _aclitem (1034)
+-- Table website(16559):Page 0:Tuple 7: Tuple incorrect length (parsed data=57,length=1638)
+-- Table website(16559):Page 0:Tuple 44: Decoding tuple runs off end: 627338916 > 69
+-- Table website(16559):Page 0:Tuple 70: Bad tuple offset. Should be: 3784 <= 11592 < 8192
+
+BUGS / LIMITATIONS
+
+Currently the following features are not supported:
+
+- Dumping indexes doesn't work
+- Arrays don't work
+- Since each type output has to be rewritten, many types are not correctly output
+- Split tables (1GB) are not supported past the first part.
+- Some system tables in some versions have a strange layout. You may get many
+  harmless warnings about the format of pg_class, pg_attribute and/or pg_type.
+
+AUTHOR
+
+Martijn van Oosterhout <kleptog@svana.org>  2002 - 2008
+http://svana.org/kleptog/
+
+LICENCE
+
+This program may be redistributed under the same terms as PostgreSQL itself.
