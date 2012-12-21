@@ -229,7 +229,7 @@ sub ParseTuple ($$$$)
     my ($name,$type,$len,$align) = @{ $attrinfo->[$i-1] };
     #print "NTLA: $name $type $len $align\n";
 
-    #print ">> Off $off: Field $i: ($name,$type,$len,$align)\n";
+#    print ">> Off $off: Field $i: ($name,$type,$len,$align)\n";
     
     # If it's null, attribute is skipped
     if( defined ($nulls[$i-1]) and not $nulls[$i-1] )
@@ -241,6 +241,7 @@ sub ParseTuple ($$$$)
 
     # Deal with the alignment requirements
     $off = ($off + $align - 1) & ~($align - 1);
+    print ">> Aligned Off $off: Field $i: ($name,$type,$len,$align)\n";
 
     # Have we gone over the length of the tuple?
     if( $off > length($tupledata) )
@@ -294,8 +295,11 @@ sub ParseTuple ($$$$)
     }
     elsif( $len == -1 )  # Variable length
     {
-      my $va_header = unpack("l", $fielddata);   # Decode the first byte
-      my $va_header_1b = unpack("c", $fielddata);   # Decode the first byte
+	print "Fielddata length: ". length($fielddata) . "\n";
+    	print ">>",(map { sprintf "%02X ", $_ } unpack("C*", $fielddata)),"\n";
+
+      my $va_header = unpack("L", $fielddata);   # Decode the first byte
+      my $va_header_1b = unpack("C", $fielddata);   # Decode the first byte
 
 #      print "Variable length: $va_header (" . length($fielddata) . ")\n";
 
@@ -314,7 +318,7 @@ my $is_u = 0;
 #define VARATT_IS_4B_U(PTR) \
 #        ((((varattrib_1b *) (PTR))->va_header & 0x03) == 0x00)
         #print "varatt_is_4b_u" 
-	if (($va_header_1b & 0x03) == 0x00) {
+	elsif(($va_header_1b & 0x03) == 0x00) {
                 $is_b = 4;    
                 $is_c = 0;
                 $is_u = 1;
@@ -323,7 +327,7 @@ my $is_u = 0;
 #define VARATT_IS_4B_C(PTR) \
 #        ((((varattrib_1b *) (PTR))->va_header & 0x03) == 0x02)
         #print "varatt_is_4b_c" 
-	if (($va_header_1b & 0x03) == 0x02) {
+	elsif (($va_header_1b & 0x03) == 0x02) {
                 $is_b = 4;    
                 $is_c = 1;
                 $is_u = 0;
@@ -332,11 +336,13 @@ my $is_u = 0;
 #define VARATT_IS_1B(PTR) \
 #        ((((varattrib_1b *) (PTR))->va_header & 0x01) == 0x01)
         #print "varatt_is_1b" 
-	if (($va_header_1b & 0x01) == 0x01) {
+	elsif (($va_header_1b & 0x01) == 0x01) {
                 $is_b = 1;    
                 $is_c = 0;
                 $is_u = 0;
-        }
+        } else {
+	  die "Header kan niet gedecodeerd worden"
+	}
 
 #define VARATT_IS_1B_E(PTR) \
 #        ((((varattrib_1b *) (PTR))->va_header) == 0x01)
@@ -380,13 +386,13 @@ my $varsize_1b = ($va_header_1b >> 1) & 0x7F;
 	}
         #$val = substr($fielddata,4,($va_header & 0x3fffffff)-4);
 	#$len = ($va_header & 0x3fffffff) -4;
-	print "Inline Len: $len Value: '$val'\n";
+	print "Inline $is_b Len: $len Value: '$val'\n";
       }
 
       #if( $va_header & 0x40000000 )  # Compressed tuple?
       if( $is_c )  # Compressed tuple?
       {
-	print "Compressed\n";
+	print "Compressed $len\n";
         my $clen = unpack("L", substr($fielddata,4));
         $val = ToastDecompress( $len, $val );
       }
