@@ -210,10 +210,7 @@ sub ParseTuple ($$$$)
 #  print ">>",Dumper($header);
 #  print ">>nulllist=",join(",",@nulls),"\n";
 #  sleep 1;
- 
-#  print ">> Tupledata: ",(map { sprintf "%02X ", $_ } unpack("C*", $tupledata)),"\n";
-
- 
+  
   if( $header->{natts} > scalar(@$attrinfo) )
   {
     print ErrorContext( "Tuple header attribute count exceeds number in table (".$header->{natts}." > ".scalar(@$attrinfo).")" );
@@ -230,8 +227,6 @@ sub ParseTuple ($$$$)
       next;
     }
     my ($name,$type,$len,$align) = @{ $attrinfo->[$i-1] };
-    #print "NTLA: $name $type $len $align\n";
-
 #    print ">> Off $off: Field $i: ($name,$type,$len,$align)\n";
     
     # If it's null, attribute is skipped
@@ -242,17 +237,16 @@ sub ParseTuple ($$$$)
       next;
     }
 
-    my $volgende_byte = unpack("C", substr($tupledata,$off));   # Decode the first byte
+    my $next_byte = unpack("C", substr($tupledata,$off));   # Decode the first byte
 
-    
-    if ($len == -1 && $volgende_byte != 0x00 && $volgende_byte & 0x01 == 0x01) {
-	# niet alignen
-#	print "Skipped alignment!\n";
+    if ($len == -1 && $next_byte != 0x00 && $next_byte & 0x01 == 0x01) {
+		# dont align 1 byte datablocks - the if statement above might not be 100% correct
+		#	print "Skipped alignment!\n";
     } else {
-    # Deal with the alignment requirements
-    $off = ($off + $align - 1) & ~($align - 1);
+    	# Deal with the alignment requirements
+    	$off = ($off + $align - 1) & ~($align - 1);
     }
-#    print ">> Aligned Off $off: Field $i: ($name,$type,$len,$align)\n";
+	# print ">> Aligned Off $off: Field $i: ($name,$type,$len,$align)\n";
 
     # Have we gone over the length of the tuple?
     if( $off > length($tupledata) )
@@ -305,133 +299,140 @@ sub ParseTuple ($$$$)
       $val = unpack("l", $fielddata);
     }
     elsif( $len == -1 )  # Variable length
-    {
-#	print "Fielddata length: ". length($fielddata) . "\n";
-#    	print ">>",(map { sprintf "%02X ", $_ } unpack("C*", $fielddata)),"\n";
+	{
+		# print "Fielddata length: ". length($fielddata) . "\n";
+		# print ">>",(map { sprintf "%02X ", $_ } unpack("C*", $fielddata)),"\n";
 
-      my $va_header = unpack("L", $fielddata);   # Decode the first byte
-      my $va_header_1b = unpack("C", $fielddata);   # Decode the first byte
-      my $varsize_4b = ($va_header >> 2 ) & 0x3FFFFFFF;
-      my $varsize_1b = ($va_header_1b >> 1) & 0x7F;
+		my $va_header = unpack("L", $fielddata);   # Decode the first long
+		my $va_header_1b = unpack("C", $fielddata);   # Decode the first byte
 
-	if ($va_header_1b & 0x01 == 0x01) {
-		# 1 byte, toast of uncompressed
-		if ($va_header_1b == 0x01) {
-			die "fucked, this is toast"
-		} else {
-			# 1 byte uncompressed, inline
-                	$len = $varsize_1b;
-                	$val = substr($fielddata,1,$len-1);
+		# ----------------------
+		# from the C - catalog/postgres.h contains most of the explanation 
+		# of the below, open it now and read it, if you came up to here 
+		# ----------------------
+
+		#/* VARSIZE_4B() should only be used on known-aligned data */
+		#define VARSIZE_4B(PTR) \
+		#        ((((varattrib_4b *) (PTR))->va_4byte.va_header >> 2) & 0x3FFFFFFF)
+		my $varsize_4b = ($va_header >> 2 ) & 0x3FFFFFFF;
+
+		#define VARSIZE_1B(PTR) \
+		#        ((((varattrib_1b *) (PTR))->va_header >> 1) & 0x7F)
+		my $varsize_1b = ($va_header_1b >> 1) & 0x7F;
+
+		# New, clean, logic on decoding varying size fields
+
+		if ($va_header_1b & 0x01 == 0x01) {
+			# 1 byte, toast of uncompressed
+			if ($va_header_1b == 0x01) {
+				die "Toast data" # todo
+			} 
+			else 
+			{
+				# 1 byte uncompressed, inline
+				$len = $varsize_1b;
+				$val = substr($fielddata,1,$len-1);
+			}
+		} 
+		else 
+		{
+			# 4 byte, uncompressed of compressed
+			if ($va_header_1b & 0x02 == 0x02)  {
+				# 4 byte compressed
+			} 
+			else 
+			{
+				# 4 byte uncompressed
+			}
 		}
-	} else {
-		# 4 byte, uncompressed of compressed
-		if ($va_header_1b & 0x02 == 0x02)  {
-			# 4 byte compressed
-		} else {
-			# 4 byte uncompressed
+
+# Major todo - move the logic from below to the structured logic above
+# I stopped development here as the solution to my problem was found
+# somewhere around this point, but lied in the fact that 1byte uncompressed
+# fields are non-aligned (so the alignmentcode above was altered).
+# If someone wants to continue on this, this should be the first
+# effort to finish this.
+
+		my $is_b = 4; # bytesize 1 or 4
+		my $is_c = 0; # compression or not
+		my $is_u = 0; # unsigned
+
+		#define VARATT_IS_4B(PTR) \
+		#        ((((varattrib_1b *) (PTR))->va_header & 0x01) == 0x00)
+		if (($va_header_1b & 0x01) == 0x00) {
+			$is_b = 4;	
+			$is_c = 0;
+			$is_u = 0;
+		}
+		#define VARATT_IS_4B_U(PTR) \
+		#        ((((varattrib_1b *) (PTR))->va_header & 0x03) == 0x00)
+		elsif(($va_header_1b & 0x03) == 0x00) {
+			$is_b = 4;    
+			$is_c = 0;
+			$is_u = 1;
 		}
 
-	}
+		#define VARATT_IS_4B_C(PTR) \
+		#        ((((varattrib_1b *) (PTR))->va_header & 0x03) == 0x02)
+		elsif (($va_header_1b & 0x03) == 0x02) {
+			$is_b = 4;    
+			$is_c = 1;
+			$is_u = 0;
+		}
 
-# todo - move the logic from below to the logic above
+		#define VARATT_IS_1B(PTR) \
+		#        ((((varattrib_1b *) (PTR))->va_header & 0x01) == 0x01)
+		elsif (($va_header_1b & 0x01) == 0x01) {
+			$is_b = 1;    
+			$is_c = 0;
+			$is_u = 0;
+			} 
+		else {
+			die "Can't decode header ($va_header_1b)?"
+		}
 
-my $varsize_4b = ($va_header >> 2 ) & 0x3FFFFFFF;
+		#define VARATT_IS_1B_E(PTR) \
+		#        ((((varattrib_1b *) (PTR))->va_header) == 0x01)
+		print "varatt_is_1b_e" if ($va_header_1b) == 0x01 ;
+		#define VARATT_NOT_PAD_BYTE(PTR) \
+		#        (*((uint8 *) (PTR)) != 0)
 
-#      print "Variable length: $va_header (" . length($fielddata) . ")\n";
+		#print "BCU: $is_b $is_c $is_u\n";
 
-# from the C - catalog/postgres.h contains most of the explanation of the below, open it now and read it, if you came up to here 
-my $is_b = 4; 
-my $is_c = 0;
-my $is_u = 0;
-#define VARATT_IS_4B(PTR) \
-#        ((((varattrib_1b *) (PTR))->va_header & 0x01) == 0x00)
-	#print "varatt_is_4b" 
-	if (($va_header_1b & 0x01) == 0x00) {
-		$is_b = 4;	
-                $is_c = 0;
-                $is_u = 0;
-	}
-#define VARATT_IS_4B_U(PTR) \
-#        ((((varattrib_1b *) (PTR))->va_header & 0x03) == 0x00)
-        #print "varatt_is_4b_u" 
-	elsif(($va_header_1b & 0x03) == 0x00) {
-                $is_b = 4;    
-                $is_c = 0;
-                $is_u = 1;
-        }
-
-#define VARATT_IS_4B_C(PTR) \
-#        ((((varattrib_1b *) (PTR))->va_header & 0x03) == 0x02)
-        #print "varatt_is_4b_c" 
-	elsif (($va_header_1b & 0x03) == 0x02) {
-                $is_b = 4;    
-                $is_c = 1;
-                $is_u = 0;
-        }
-
-#define VARATT_IS_1B(PTR) \
-#        ((((varattrib_1b *) (PTR))->va_header & 0x01) == 0x01)
-        #print "varatt_is_1b" 
-	elsif (($va_header_1b & 0x01) == 0x01) {
-                $is_b = 1;    
-                $is_c = 0;
-                $is_u = 0;
-        } else {
-	  die "Header kan niet gedecodeerd worden"
-	}
-
-#define VARATT_IS_1B_E(PTR) \
-#        ((((varattrib_1b *) (PTR))->va_header) == 0x01)
-        print "varatt_is_1b_e" if ($va_header_1b) == 0x01 ;
-#define VARATT_NOT_PAD_BYTE(PTR) \
-#        (*((uint8 *) (PTR)) != 0)
-
-#print "BCU: $is_b $is_c $is_u\n";
-
-#/* VARSIZE_4B() should only be used on known-aligned data */
-#define VARSIZE_4B(PTR) \
-#        ((((varattrib_4b *) (PTR))->va_4byte.va_header >> 2) & 0x3FFFFFFF)
-my $varsize_4b = ($va_header >> 2 ) & 0x3FFFFFFF;
-#print "Varsize_4b: $varsize_4b \n";
-#define VARSIZE_1B(PTR) \
-#        ((((varattrib_1b *) (PTR))->va_header >> 1) & 0x7F)
-my $varsize_1b = ($va_header_1b >> 1) & 0x7F;
-#print "Varsize_1b: $varsize_1b \n";
-#define VARSIZE_1B_E(PTR) \
-#        (((varattrib_1b_e *) (PTR))->va_len_1be)
+		#define VARSIZE_1B_E(PTR) \
+		#        (((varattrib_1b_e *) (PTR))->va_len_1be)
 
 
       #if( $va_header & 0x80000000 )  # External tuple?
       if( ($va_header_1b) == 0x01 )  # External tuple?
       {
-#	print "External tuple\n";
         # We decode the location, but don't look it up
         my @vals = unpack("llLL", substr($fielddata,4));
-#        print "-- extern(raw=$vals[0],real=$vals[1],oid=$vals[2],relid=$vals[3])\n";
+        # print "-- extern(raw=$vals[0],real=$vals[1],oid=$vals[2],relid=$vals[3])\n";
         $val = GetToastedTuple( $vals[2] );
-#        $val .= "(".join(",",unpack("l*", substr($fielddata,4))).")";
+		# $val .= "(".join(",",unpack("l*", substr($fielddata,4))).")";
       }
       else  # Ordinary inline value
       {
-	if($is_b == 4) {
-		$len = $varsize_4b;
-		$val = substr($fielddata,4,$len-4);
-	} else {
-		$len = $varsize_1b;
-		$val = substr($fielddata,1,$len-1);
-	}
-        #$val = substr($fielddata,4,($va_header & 0x3fffffff)-4);
- 	#$len = ($va_header & 0x3fffffff) -4;
-#	print "Inline $is_b Len: $len Value: '$val'\n";
+		if($is_b == 4) {
+			$len = $varsize_4b;
+			$val = substr($fielddata,4,$len-4);
+		} else {
+			$len = $varsize_1b;
+			$val = substr($fielddata,1,$len-1);
+		}
+		# print "Inline $is_b Len: $len Value: '$val'\n";
       }
 
-      #if( $va_header & 0x40000000 )  # Compressed tuple?
       if( $is_c )  # Compressed tuple?
       {
-#	print "Compressed $len\n";
+		#	print "Compressed $len\n";
         my $clen = unpack("L", substr($fielddata,4));
         $val = ToastDecompress( $len, $val );
       }
+
+# About here ends the block of logic that should be refactored in the
+# code above...
 
       if( defined $outputfunc )
       {
@@ -482,9 +483,9 @@ sub TableScan ($$;$$)
     if( @$rels  > 1 )   # Not an error, could be updated versions. xmax == 0 is not enough
     { die "Found multiple versions of '$class' ???\n" }
 
-    print "xmax = ", join(",", map { "($_->{xmax},$_->{oid},$_->{relkind})" } @$rels), "\n";
+#    print "xmax = ", join(",", map { "($_->{xmax},$_->{oid},$_->{relkind})" } @$rels), "\n";
     my @oids = sort { $b->[0] <=> $a->[0] } map { [ $_->{oid}, $_->{reltoastrelid},  $_->{relkind} ] } @$rels;
-    print "oids = ", join(",", @oids), "\n";
+#    print "oids = ", join(",", @oids), "\n";
 
     #Dumper(@oids);
 
@@ -517,15 +518,10 @@ sub TableScan ($$;$$)
   my $file;
   if( defined $filename )
   {
-	print "File $filename\n";
-	if ($file == 2936616) { $file = 2692428;}
     $file = new FileHandle "<$filename" or die "Couldn't open file $filename ($!)\n";
   }
   else
   {
-        if ($classoid == 2936616) { $classoid = 2692428;}
-	
-	print "Relation: $class, $classoid\n";
     $file = OpenRelation( $class, $classoid );
   }
 
@@ -754,18 +750,16 @@ print "-- Loading pg_attribute structure\n";
 GetAttributeInfo( "pg_attribute" );
 
 # Read pg_database to get list
-#GetDatabaseList();
+GetDatabaseList();
 
-#if( not defined $dboidmap{$database} )
-#{
-#  die "Unknown database '$database'\n";
-#}
+if( not defined $dboidmap{$database} )
+{
+  die "Unknown database '$database'\n";
+}
 
 # Switch database
 print "-- Switching to database '$database' ($dboidmap{$database})\n";
-#SetDatabase( $database, $dboidmap{$database});
-
-SetDatabase("beheer", 2642844);
+SetDatabase( $database, $dboidmap{$database});
 
 # Read the types. Chicken and egg. Read before or after switch DB?
 print "-- Loading type info\n";
@@ -840,10 +834,7 @@ sub ToastDecompress ($$)
 {
   my ($complen, $str) = @_;
 
-  print "Uncompressing $complen bytes\n";
-
   my $rawlen = unpack("L", $str);
-  print "Rawlen: $rawlen\n";
   my $offset = 4;
 
   my $output = "";
